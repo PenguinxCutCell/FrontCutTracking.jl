@@ -123,3 +123,20 @@ end
     empty_tracker = FrontTracker()
     @test_throws ArgumentError write_vtk_front(empty_tracker, "dummy")
 end
+
+@testset "Signed distance" begin
+    tracker = sphere_front(radius=1.0, rings=5, segments=12)
+    d_center = signed_distance(tracker, (0, 0, 0))
+    @test d_center < 0
+    @test isapprox(abs(d_center), 1.0; atol=0.2)
+
+    d_out = signed_distance(tracker, (1.4, 0, 0))
+    @test d_out > 0
+    @test isapprox(d_out, 0.4; atol=0.2)
+
+    batch = signed_distance(tracker, [(0, 0, 0.5), (2, 0, 0)])
+    @test length(batch) == 2
+    @test batch[1] < 0 && batch[2] > 0
+
+    @test_throws ArgumentError signed_distance(FrontTracker(), (0, 0, 0))
+end

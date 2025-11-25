@@ -5,6 +5,7 @@ tracking style algorithms. The `FrontTracker` container stores points, lines,
 and triangular surfaces with simple mutation helpers plus a few ready-made
 initializers for classical interface setups.
 
+![Sphere 3D front](img/sphere_3d.png)
 ## Quick start
 
 ```julia
@@ -47,6 +48,17 @@ write_vtk_front(tracker, "front_sphere")  # creates front_sphere.vtu
 ```
 
 Open the resulting `.vtu` file inside ParaView to inspect the mesh.
+
+## Signed distance queries
+
+```julia
+sphere = sphere_front(radius = 1.0, rings = 6, segments = 12)
+d_center = signed_distance(sphere, (0, 0, 0))    # negative (inside)
+d_far    = signed_distance(sphere, (2, 0, 0))    # positive (outside)
+```
+
+The function expects a closed surface (triangular connectivity) and returns the
+minimum distance while assigning a sign via ray casting.
 
 ## Running the tests
 

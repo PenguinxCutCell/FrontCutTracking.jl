@@ -14,15 +14,16 @@ export FrontTracker,
        num_surfaces,
        lines_touching,
        surfaces_touching,
-    reset!,
-    point_front,
-    line_front,
-    circle_front,
-    planar_patch_front,
-    sphere_front,
-    star_front,
-    star3d_front,
-    write_vtk_front
+       reset!,
+       point_front,
+       line_front,
+       circle_front,
+       planar_patch_front,
+       sphere_front,
+       star_front,
+       star3d_front,
+       signed_distance,
+       write_vtk_front
 
 const Point3D{T} = NTuple{3,T}
 const Line = NTuple{2,Int}
@@ -83,6 +84,12 @@ _point_tuple(point::Point3D{Ti}, ::Type{T}) where {Ti,T} =
 
 _tuple_add(a, b) = (a[1] + b[1], a[2] + b[2], a[3] + b[3])
 _tuple_scale(a, s) = (a[1] * s, a[2] * s, a[3] * s)
+_tuple_sub(a, b) = (a[1] - b[1], a[2] - b[2], a[3] - b[3])
+_tuple_dot(a, b) = a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
+_tuple_cross(a, b) = (a[2] * b[3] - a[3] * b[2],
+                      a[3] * b[1] - a[1] * b[3],
+                      a[1] * b[2] - a[2] * b[1])
+_tuple_norm(a) = sqrt(_tuple_dot(a, a))
 
 function _normalize_direction(direction)
     vec = _point_tuple(direction, Float64)
@@ -632,6 +639,133 @@ function write_vtk_front(tracker::FrontTracker, filepath::AbstractString; compre
     dataset = vtk_grid(filepath, points, cells; compress=compress)
     vtk_save(dataset)
     dataset.path
+end
+
+# -- Signed distance computations -------------------------------------------
+
+const _RAY_DIR = (0.8728715609439696, 0.4364357804719848, 0.2182178902359924)
+const _INTERSECT_EPS = 1e-9
+const _DIST_TOL = 1e-10
+
+function _point_triangle_distance(p, a, b, c)
+    ab = _tuple_sub(b, a)
+    ac = _tuple_sub(c, a)
+    ap = _tuple_sub(p, a)
+
+    d1 = _tuple_dot(ab, ap)
+    d2 = _tuple_dot(ac, ap)
+    if d1 <= 0 && d2 <= 0
+        return _tuple_norm(ap)
+    end
+
+    bp = _tuple_sub(p, b)
+    d3 = _tuple_dot(ab, bp)
+    d4 = _tuple_dot(ac, bp)
+    if d3 >= 0 && d4 <= d3
+        return _tuple_norm(bp)
+    end
+
+    vc = d1 * d4 - d3 * d2
+    if vc <= 0 && d1 >= 0 && d3 <= 0
+        v = d1 / (d1 - d3)
+        proj = _tuple_add(a, _tuple_scale(ab, v))
+        return _tuple_norm(_tuple_sub(p, proj))
+    end
+
+    cp = _tuple_sub(p, c)
+    d5 = _tuple_dot(ab, cp)
+    d6 = _tuple_dot(ac, cp)
+    if d6 >= 0 && d5 <= d6
+        return _tuple_norm(cp)
+    end
+
+    vb = d5 * d2 - d1 * d6
+    if vb <= 0 && d2 >= 0 && d6 <= 0
+        w = d2 / (d2 - d6)
+        proj = _tuple_add(a, _tuple_scale(ac, w))
+        return _tuple_norm(_tuple_sub(p, proj))
+    end
+
+    va = d3 * d6 - d5 * d4
+    if va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0
+        edge = _tuple_sub(c, b)
+        w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+        proj = _tuple_add(b, _tuple_scale(edge, w))
+        return _tuple_norm(_tuple_sub(p, proj))
+    end
+
+    denom = 1 / (va + vb + vc)
+    v = vb * denom
+    w = vc * denom
+    proj = _tuple_add(a, _tuple_add(_tuple_scale(ab, v), _tuple_scale(ac, w)))
+    _tuple_norm(_tuple_sub(p, proj))
+end
+
+function _closest_triangle_distance(tracker::FrontTracker, point)
+    isempty(tracker.surfaces) &&
+        throw(ArgumentError("signed_distance requires a tracker with surfaces."))
+    pts = tracker.points
+    best = Inf
+    for (i1, i2, i3) in tracker.surfaces
+        d = _point_triangle_distance(point, pts[i1], pts[i2], pts[i3])
+        if d < best
+            best = d
+            best <= _DIST_TOL && return 0.0
+        end
+    end
+    best
+end
+
+function _ray_hits_triangle(point, dir, a, b, c)
+    edge1 = _tuple_sub(b, a)
+    edge2 = _tuple_sub(c, a)
+    h = _tuple_cross(dir, edge2)
+    det = _tuple_dot(edge1, h)
+    if abs(det) < _INTERSECT_EPS
+        return false
+    end
+    inv_det = 1 / det
+    s = _tuple_sub(point, a)
+    u = _tuple_dot(s, h) * inv_det
+    (u < 0 || u > 1) && return false
+    q = _tuple_cross(s, edge1)
+    v = _tuple_dot(dir, q) * inv_det
+    (v < 0 || u + v > 1) && return false
+    t = _tuple_dot(edge2, q) * inv_det
+    t > _INTERSECT_EPS
+end
+
+function _point_inside_mesh(tracker::FrontTracker, point)
+    hits = 0
+    pts = tracker.points
+    for (i1, i2, i3) in tracker.surfaces
+        hits += _ray_hits_triangle(point, _RAY_DIR, pts[i1], pts[i2], pts[i3]) ? 1 : 0
+    end
+    isodd(hits)
+end
+
+"""
+    signed_distance(tracker, point)
+
+Compute the signed distance from `point` to the interface represented by
+`tracker`. A negative sign denotes the reference phase (interior), positive is
+outside. Requires that `tracker` carries surface connectivity describing a
+closed mesh.
+"""
+function signed_distance(tracker::FrontTracker, point)
+    isempty(tracker.surfaces) &&
+        throw(ArgumentError("signed_distance requires a tracker with surfaces."))
+    p = _point_tuple(point, Float64)
+    d = _closest_triangle_distance(tracker, p)
+    if d <= _DIST_TOL
+        return 0.0
+    end
+    inside = _point_inside_mesh(tracker, p)
+    inside ? -d : d
+end
+
+function signed_distance(tracker::FrontTracker, points::AbstractVector)
+    [signed_distance(tracker, p) for p in points]
 end
 
 end # module
