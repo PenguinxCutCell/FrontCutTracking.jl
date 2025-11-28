@@ -17,6 +17,13 @@ include("fronttracker1d/geometry.jl")
 include("fronttracker1d/capacities.jl")
 include("fronttracker1d/spacetime.jl")
 
+include("fronttracker3d/types.jl")
+include("fronttracker3d/markers.jl")
+include("fronttracker3d/shapes.jl")
+include("fronttracker3d/geometry.jl")
+include("fronttracker3d/segments.jl")
+include("fronttracker3d/intercepts.jl")
+
 export FrontTracker,
 	   create_circle!,
 	   create_rectangle!,
@@ -44,6 +51,30 @@ export FrontTracker,
 	   compute_spacetime_capacities,
 	   FrontTracker1D,
 	   compute_capacities_1d,
-	   compute_spacetime_capacities_1d
+	   compute_spacetime_capacities_1d,
+	   # 3D FrontTracker exports
+	   FrontTracker3D,
+	   get_faces,
+	   set_faces!,
+	   add_face!,
+	   create_sphere!,
+	   create_box!,
+	   create_ellipsoid!,
+	   create_cylinder!,
+	   compute_face_normal,
+	   compute_face_area,
+	   compute_total_surface_area,
+	   compute_enclosed_volume,
+	   compute_centroid,
+	   compute_edge_parameters,
+	   compute_face_parameters,
+	   get_adjacent_faces,
+	   get_adjacent_markers,
+	   compute_vertex_area,
+	   compute_mean_curvature,
+	   compute_face_cell_intersections,
+	   compute_intercept_jacobian_3d,
+	   update_front_with_intercept_displacements_3d!,
+	   compute_volume_jacobian_3d
 
 end # module

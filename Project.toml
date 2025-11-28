@@ -1,7 +1,7 @@
 name = "FrontCutTracking"
 uuid = "0ec1a2bd-0df2-4d71-94d3-a499e1c962f8"
-authors = ["PenguinxCutCell"]
 version = "0.1.0"
+authors = ["PenguinxCutCell"]
 
 [deps]
 GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
