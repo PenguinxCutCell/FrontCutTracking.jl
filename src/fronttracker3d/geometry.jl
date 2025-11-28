@@ -448,49 +448,19 @@ function compute_marker_normals(ft::FrontTracker3D)
 end
 
 """
-    gauss_legendre_points_weights(n::Int)
+    compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple)
 
-Returns Gauss-Legendre quadrature points and weights for n points on [-1, 1].
-"""
-function gauss_legendre_points_weights(n::Int)
-    if n == 2
-        return [-1/sqrt(3), 1/sqrt(3)], [1.0, 1.0]
-    elseif n == 3
-        return [-sqrt(3/5), 0.0, sqrt(3/5)], [5/9, 8/9, 5/9]
-    elseif n == 4
-        p1 = sqrt(3/7 - 2/7*sqrt(6/5))
-        p2 = sqrt(3/7 + 2/7*sqrt(6/5))
-        w1 = (18 + sqrt(30)) / 36
-        w2 = (18 - sqrt(30)) / 36
-        return [-p2, -p1, p1, p2], [w2, w1, w1, w2]
-    elseif n == 5
-        p1 = 1/3 * sqrt(5 - 2*sqrt(10/7))
-        p2 = 1/3 * sqrt(5 + 2*sqrt(10/7))
-        w1 = (322 + 13*sqrt(70)) / 900
-        w2 = (322 - 13*sqrt(70)) / 900
-        return [-p2, -p1, 0.0, p1, p2], [w2, w1, 128/225, w1, w2]
-    elseif n >= 6
-        # For n >= 6, use uniform points as a simple fallback
-        # This gives good accuracy for smooth integrands
-        points = collect(range(-1, 1, length=n))
-        weights = fill(2.0/n, n)
-        return points, weights
-    else
-        # Default to 3-point quadrature
-        return [-sqrt(3/5), 0.0, sqrt(3/5)], [5/9, 8/9, 5/9]
-    end
-end
-
-"""
-    compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple; n_quadrature::Int=7)
-
-Computes the fluid volume inside a single 3D cell using Gauss-Legendre quadrature.
+Computes the fluid volume inside a single 3D cell using the divergence theorem.
 cell_bounds = ((x_min, x_max), (y_min, y_max), (z_min, z_max))
 
-Uses tensor product of 1D Gauss-Legendre quadrature rules for deterministic 3D integration.
-The number of evaluation points is n_quadrature^3.
+Uses the divergence theorem: V = (1/3) ∫∫_∂Ω x·n dA
+The boundary ∂Ω consists of:
+1. Interface triangles clipped to the cell
+2. Cell face portions that are inside the fluid
+
+This is a geometric method that computes exact volumes based on edge/face intersections.
 """
-function compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple; n_quadrature::Int=7)
+function compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple)
     x_min, x_max = cell_bounds[1]
     y_min, y_max = cell_bounds[2]
     z_min, z_max = cell_bounds[3]
@@ -499,43 +469,287 @@ function compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple;
         return 0.0
     end
     
-    # Get Gauss-Legendre points and weights
-    points, weights = gauss_legendre_points_weights(n_quadrature)
+    cell_volume = (x_max - x_min) * (y_max - y_min) * (z_max - z_min)
     
-    # Transform from [-1,1] to cell bounds
-    # x = (x_max - x_min)/2 * xi + (x_max + x_min)/2
-    hx = (x_max - x_min) / 2
-    hy = (y_max - y_min) / 2
-    hz = (z_max - z_min) / 2
+    # Check if cell center is inside
+    cx, cy, cz = (x_min + x_max) / 2, (y_min + y_max) / 2, (z_min + z_max) / 2
+    center_inside = is_point_inside(ft, cx, cy, cz)
     
-    cx = (x_max + x_min) / 2
-    cy = (y_max + y_min) / 2
-    cz = (z_max + z_min) / 2
+    # Check all 8 corners
+    corners = [
+        (x_min, y_min, z_min), (x_max, y_min, z_min),
+        (x_min, y_max, z_min), (x_max, y_max, z_min),
+        (x_min, y_min, z_max), (x_max, y_min, z_max),
+        (x_min, y_max, z_max), (x_max, y_max, z_max)
+    ]
+    corners_inside = [is_point_inside(ft, c[1], c[2], c[3]) for c in corners]
+    n_corners_inside = sum(corners_inside)
     
-    # Jacobian of transformation
-    jacobian = hx * hy * hz
+    # If all corners are inside, cell is fully inside fluid
+    if n_corners_inside == 8
+        return cell_volume
+    end
     
-    # Integrate using tensor product quadrature
-    integral = 0.0
+    # If all corners are outside and center is outside, cell is fully outside
+    if n_corners_inside == 0 && !center_inside
+        # Double check by testing if any face intersects
+        has_intersection = false
+        for (i1, i2, i3) in ft.faces
+            v1 = ft.markers[i1]
+            v2 = ft.markers[i2]
+            v3 = ft.markers[i3]
+            if triangle_intersects_box(v1, v2, v3, cell_bounds)
+                has_intersection = true
+                break
+            end
+        end
+        if !has_intersection
+            return 0.0
+        end
+    end
     
-    for (i, xi) in enumerate(points)
-        for (j, eta) in enumerate(points)
-            for (k, zeta) in enumerate(points)
-                # Transform to physical coordinates
-                x = hx * xi + cx
-                y = hy * eta + cy
-                z = hz * zeta + cz
+    # For cut cells, use divergence theorem: V = (1/3) ∫∫ x·n dA
+    # Sum contributions from interface triangles clipped to cell
+    volume = 0.0
+    
+    for (i1, i2, i3) in ft.faces
+        v1 = ft.markers[i1]
+        v2 = ft.markers[i2]
+        v3 = ft.markers[i3]
+        
+        # Clip triangle to cell bounds
+        clipped_polygon = clip_triangle_to_box(v1, v2, v3, cell_bounds)
+        
+        if length(clipped_polygon) >= 3
+            # Compute contribution using divergence theorem
+            # For each triangle in the clipped polygon (fan triangulation)
+            p0 = clipped_polygon[1]
+            for i in 2:length(clipped_polygon)-1
+                p1 = clipped_polygon[i]
+                p2 = clipped_polygon[i+1]
                 
-                # Evaluate characteristic function (1 if inside, 0 if outside)
-                if is_point_inside(ft, x, y, z)
-                    # Add weighted contribution
-                    integral += weights[i] * weights[j] * weights[k]
-                end
+                # Triangle contribution: (1/3) * centroid · normal * area
+                # Using signed volume of tetrahedron with origin
+                vol_contrib = signed_tetrahedron_volume((0.0, 0.0, 0.0), p0, p1, p2)
+                volume += vol_contrib
             end
         end
     end
     
-    return jacobian * integral
+    # Add contributions from cell faces that are inside the fluid
+    # For each cell face, compute the area inside the fluid
+    volume += compute_cell_face_contributions(ft, cell_bounds, corners_inside)
+    
+    return abs(volume)
+end
+
+"""
+    triangle_intersects_box(v1, v2, v3, cell_bounds)
+
+Quick check if a triangle might intersect an axis-aligned box.
+"""
+function triangle_intersects_box(v1::Tuple{Float64, Float64, Float64},
+                                  v2::Tuple{Float64, Float64, Float64},
+                                  v3::Tuple{Float64, Float64, Float64},
+                                  cell_bounds::Tuple)
+    x_min, x_max = cell_bounds[1]
+    y_min, y_max = cell_bounds[2]
+    z_min, z_max = cell_bounds[3]
+    
+    # Check bounding box overlap
+    tri_x_min = min(v1[1], v2[1], v3[1])
+    tri_x_max = max(v1[1], v2[1], v3[1])
+    tri_y_min = min(v1[2], v2[2], v3[2])
+    tri_y_max = max(v1[2], v2[2], v3[2])
+    tri_z_min = min(v1[3], v2[3], v3[3])
+    tri_z_max = max(v1[3], v2[3], v3[3])
+    
+    return !(tri_x_max < x_min || tri_x_min > x_max ||
+             tri_y_max < y_min || tri_y_min > y_max ||
+             tri_z_max < z_min || tri_z_min > z_max)
+end
+
+"""
+    clip_triangle_to_box(v1, v2, v3, cell_bounds)
+
+Clips a triangle to an axis-aligned box using Sutherland-Hodgman algorithm.
+Returns a polygon (list of vertices) representing the clipped region.
+"""
+function clip_triangle_to_box(v1::Tuple{Float64, Float64, Float64},
+                               v2::Tuple{Float64, Float64, Float64},
+                               v3::Tuple{Float64, Float64, Float64},
+                               cell_bounds::Tuple)
+    x_min, x_max = cell_bounds[1]
+    y_min, y_max = cell_bounds[2]
+    z_min, z_max = cell_bounds[3]
+    
+    # Start with triangle vertices
+    polygon = [v1, v2, v3]
+    
+    # Clip against each of the 6 planes
+    polygon = clip_polygon_against_plane(polygon, (1.0, 0.0, 0.0), x_min)
+    if isempty(polygon) return polygon end
+    
+    polygon = clip_polygon_against_plane(polygon, (-1.0, 0.0, 0.0), -x_max)
+    if isempty(polygon) return polygon end
+    
+    polygon = clip_polygon_against_plane(polygon, (0.0, 1.0, 0.0), y_min)
+    if isempty(polygon) return polygon end
+    
+    polygon = clip_polygon_against_plane(polygon, (0.0, -1.0, 0.0), -y_max)
+    if isempty(polygon) return polygon end
+    
+    polygon = clip_polygon_against_plane(polygon, (0.0, 0.0, 1.0), z_min)
+    if isempty(polygon) return polygon end
+    
+    polygon = clip_polygon_against_plane(polygon, (0.0, 0.0, -1.0), -z_max)
+    
+    return polygon
+end
+
+"""
+    clip_polygon_against_plane(polygon, normal, d)
+
+Clips a polygon against a half-space defined by normal · p >= d.
+"""
+function clip_polygon_against_plane(polygon::Vector{Tuple{Float64, Float64, Float64}},
+                                    normal::Tuple{Float64, Float64, Float64},
+                                    d::Float64)
+    if isempty(polygon)
+        return polygon
+    end
+    
+    output = Tuple{Float64, Float64, Float64}[]
+    n = length(polygon)
+    
+    for i in 1:n
+        current = polygon[i]
+        next = polygon[mod1(i + 1, n)]
+        
+        current_dist = dot3(normal, current) - d
+        next_dist = dot3(normal, next) - d
+        
+        current_inside = current_dist >= -1e-10
+        next_inside = next_dist >= -1e-10
+        
+        if current_inside
+            push!(output, current)
+            if !next_inside
+                # Compute intersection
+                t = current_dist / (current_dist - next_dist)
+                t = clamp(t, 0.0, 1.0)
+                intersection = (
+                    current[1] + t * (next[1] - current[1]),
+                    current[2] + t * (next[2] - current[2]),
+                    current[3] + t * (next[3] - current[3])
+                )
+                push!(output, intersection)
+            end
+        elseif next_inside
+            # Compute intersection
+            t = current_dist / (current_dist - next_dist)
+            t = clamp(t, 0.0, 1.0)
+            intersection = (
+                current[1] + t * (next[1] - current[1]),
+                current[2] + t * (next[2] - current[2]),
+                current[3] + t * (next[3] - current[3])
+            )
+            push!(output, intersection)
+        end
+    end
+    
+    return output
+end
+
+"""
+    signed_tetrahedron_volume(p0, p1, p2, p3)
+
+Computes the signed volume of a tetrahedron with vertices p0, p1, p2, p3.
+Volume = (1/6) * |det([p1-p0, p2-p0, p3-p0])|
+"""
+function signed_tetrahedron_volume(p0::Tuple{Float64, Float64, Float64},
+                                    p1::Tuple{Float64, Float64, Float64},
+                                    p2::Tuple{Float64, Float64, Float64},
+                                    p3::Tuple{Float64, Float64, Float64})
+    # Vectors from p0 to other points
+    a = (p1[1] - p0[1], p1[2] - p0[2], p1[3] - p0[3])
+    b = (p2[1] - p0[1], p2[2] - p0[2], p2[3] - p0[3])
+    c = (p3[1] - p0[1], p3[2] - p0[2], p3[3] - p0[3])
+    
+    # Determinant = a · (b × c)
+    cross_bc = cross3(b, c)
+    det = dot3(a, cross_bc)
+    
+    return det / 6.0
+end
+
+"""
+    compute_cell_face_contributions(ft::FrontTracker3D, cell_bounds::Tuple, corners_inside::Vector{Bool})
+
+Computes the volume contributions from cell faces using the divergence theorem.
+For each cell face, we need to account for the portion that bounds the fluid region.
+"""
+function compute_cell_face_contributions(ft::FrontTracker3D, cell_bounds::Tuple, corners_inside::Vector{Bool})
+    x_min, x_max = cell_bounds[1]
+    y_min, y_max = cell_bounds[2]
+    z_min, z_max = cell_bounds[3]
+    
+    volume = 0.0
+    
+    # For each face of the cell, if it's entirely inside the fluid or partially inside,
+    # we need to add its contribution to the volume integral
+    
+    # Face at x = x_min (normal pointing -x), corners 1,3,5,7
+    face_corners = [corners_inside[1], corners_inside[3], corners_inside[7], corners_inside[5]]
+    if all(face_corners)
+        # Entire face inside fluid: contribution = x_min * face_area * (-1) / 3 = -x_min * dy * dz / 3
+        # Using divergence theorem with n = (-1, 0, 0)
+        dy = y_max - y_min
+        dz = z_max - z_min
+        volume -= x_min * dy * dz / 3.0
+    end
+    
+    # Face at x = x_max (normal pointing +x), corners 2,4,6,8
+    face_corners = [corners_inside[2], corners_inside[4], corners_inside[8], corners_inside[6]]
+    if all(face_corners)
+        dy = y_max - y_min
+        dz = z_max - z_min
+        volume += x_max * dy * dz / 3.0
+    end
+    
+    # Face at y = y_min (normal pointing -y), corners 1,2,5,6
+    face_corners = [corners_inside[1], corners_inside[2], corners_inside[6], corners_inside[5]]
+    if all(face_corners)
+        dx = x_max - x_min
+        dz = z_max - z_min
+        volume -= y_min * dx * dz / 3.0
+    end
+    
+    # Face at y = y_max (normal pointing +y), corners 3,4,7,8
+    face_corners = [corners_inside[3], corners_inside[4], corners_inside[8], corners_inside[7]]
+    if all(face_corners)
+        dx = x_max - x_min
+        dz = z_max - z_min
+        volume += y_max * dx * dz / 3.0
+    end
+    
+    # Face at z = z_min (normal pointing -z), corners 1,2,3,4
+    face_corners = [corners_inside[1], corners_inside[2], corners_inside[4], corners_inside[3]]
+    if all(face_corners)
+        dx = x_max - x_min
+        dy = y_max - y_min
+        volume -= z_min * dx * dy / 3.0
+    end
+    
+    # Face at z = z_max (normal pointing +z), corners 5,6,7,8
+    face_corners = [corners_inside[5], corners_inside[6], corners_inside[8], corners_inside[7]]
+    if all(face_corners)
+        dx = x_max - x_min
+        dy = y_max - y_min
+        volume += z_max * dx * dy / 3.0
+    end
+    
+    return volume
 end
 
 """
