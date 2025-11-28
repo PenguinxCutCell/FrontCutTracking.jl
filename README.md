@@ -1,6 +1,6 @@
 # FrontCutTracking.jl
 
-[CI](https://github.com/PenguinxCutCell/FrontCutTracking.jl/actions/workflows/CI.yml)
+![CI](https://github.com/PenguinxCutCell/FrontCutTracking.jl/actions/workflows/CI.yml)
 
 FrontCutTracking.jl provides lightweight 1D/2D front-tracking helpers in pure Julia.
 It exposes `FrontTracker` (2D) and `FrontTracker1D` containers along with geometry,
