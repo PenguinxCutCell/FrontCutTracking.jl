@@ -1,5 +1,3 @@
-using LinearAlgebra
-
 """
     is_point_inside(ft::FrontTracker3D, x::Float64, y::Float64, z::Float64)
 

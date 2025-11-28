@@ -173,6 +173,8 @@ function line_plane_intersection(p1::Tuple{Float64, Float64, Float64},
     end
     
     t = (d - dot3(normal, p1)) / denom
+    # Clamp t to [0, 1] to handle numerical precision issues at segment endpoints
+    # and ensure the intersection point lies within the line segment
     t = clamp(t, 0.0, 1.0)
     
     return (p1[1] + t * direction[1],
