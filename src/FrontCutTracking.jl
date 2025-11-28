@@ -74,6 +74,7 @@ export FrontTracker,
 	   compute_mean_curvature,
 	   compute_face_cell_intersections,
 	   compute_intercept_jacobian_3d,
-	   update_front_with_intercept_displacements_3d!
+	   update_front_with_intercept_displacements_3d!,
+	   compute_volume_jacobian_3d
 
 end # module

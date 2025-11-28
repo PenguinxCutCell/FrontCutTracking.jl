@@ -253,6 +253,30 @@ end
     @test isempty(intersections[(1, 1, 1)])  # Corner far from center
 end
 
+@testset "FrontTracker3D Volume Jacobian" begin
+    front = FrontTracker3D()
+    create_sphere!(front, 0.5, 0.5, 0.5, 0.3, 6, 12)
+    
+    # Create a coarse mesh
+    x_faces = collect(0.0:0.5:1.0)
+    y_faces = collect(0.0:0.5:1.0)
+    z_faces = collect(0.0:0.5:1.0)
+    
+    # Compute the volume Jacobian
+    jacobian = compute_volume_jacobian_3d(front, x_faces, y_faces, z_faces)
+    
+    # Basic checks
+    @test isa(jacobian, Dict{Tuple{Int, Int, Int}, Vector{Tuple{Int, Float64}}})
+    
+    # All 8 cells should exist in the dictionary
+    nx, ny, nz = length(x_faces)-1, length(y_faces)-1, length(z_faces)-1
+    @test length(jacobian) == nx * ny * nz
+    
+    # At least some cells should have non-zero Jacobian entries
+    has_nonzero_entries = any(!isempty(v) for v in values(jacobian))
+    @test has_nonzero_entries
+end
+
 @testset "Julia FrontTracking Tests" begin
     
     @testset "Basic Construction" begin

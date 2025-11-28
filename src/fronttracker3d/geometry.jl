@@ -446,3 +446,166 @@ function compute_marker_normals(ft::FrontTracker3D)
     
     return normals
 end
+
+"""
+    compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple)
+
+Computes the fluid volume inside a single 3D cell using Monte Carlo integration.
+cell_bounds = ((x_min, x_max), (y_min, y_max), (z_min, z_max))
+"""
+function compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple; n_samples::Int=1000)
+    x_min, x_max = cell_bounds[1]
+    y_min, y_max = cell_bounds[2]
+    z_min, z_max = cell_bounds[3]
+    
+    cell_volume = (x_max - x_min) * (y_max - y_min) * (z_max - z_min)
+    
+    if isempty(ft.faces) || isempty(ft.markers)
+        return 0.0
+    end
+    
+    # Monte Carlo integration - count points inside fluid
+    inside_count = 0
+    
+    for _ in 1:n_samples
+        x = x_min + rand() * (x_max - x_min)
+        y = y_min + rand() * (y_max - y_min)
+        z = z_min + rand() * (z_max - z_min)
+        
+        if is_point_inside(ft, x, y, z)
+            inside_count += 1
+        end
+    end
+    
+    return cell_volume * inside_count / n_samples
+end
+
+"""
+    compute_volume_jacobian_3d(ft::FrontTracker3D, x_faces::AbstractVector{<:Real}, 
+                               y_faces::AbstractVector{<:Real}, z_faces::AbstractVector{<:Real}, 
+                               epsilon::Float64=1e-6)
+
+Calculates the volume Jacobian matrix for a given 3D mesh and interface.
+The Jacobian represents ∂V_cell/∂δ_marker, the sensitivity of cell fluid volumes
+to marker displacements along their normal directions.
+
+Uses central differencing: J[i,j,k,m] = (V⁺ - V⁻) / (2ε)
+
+Returns a dictionary mapping cell indices (i,j,k) to lists of (marker_idx, jacobian_value).
+"""
+function compute_volume_jacobian_3d(ft::FrontTracker3D, x_faces::AbstractVector{<:Real}, 
+                                    y_faces::AbstractVector{<:Real}, z_faces::AbstractVector{<:Real}, 
+                                    epsilon::Float64=1e-6)
+    # Convert to vectors if needed
+    x_faces_vec = collect(x_faces)
+    y_faces_vec = collect(y_faces)
+    z_faces_vec = collect(z_faces)
+    
+    # Get mesh dimensions
+    nx = length(x_faces_vec) - 1
+    ny = length(y_faces_vec) - 1
+    nz = length(z_faces_vec) - 1
+    
+    # Get markers and compute their normals
+    markers = get_markers(ft)
+    normals = compute_marker_normals(ft)
+    n_markers = length(markers)
+    
+    # Calculate original cell volumes
+    original_volumes = Dict{Tuple{Int, Int, Int}, Float64}()
+    
+    for i in 1:nx
+        for j in 1:ny
+            for k in 1:nz
+                cell_bounds = (
+                    (x_faces_vec[i], x_faces_vec[i+1]),
+                    (y_faces_vec[j], y_faces_vec[j+1]),
+                    (z_faces_vec[k], z_faces_vec[k+1])
+                )
+                original_volumes[(i, j, k)] = compute_fluid_volume_in_cell_3d(ft, cell_bounds)
+            end
+        end
+    end
+    
+    # Initialize dictionary for storing the Jacobian
+    volume_jacobian = Dict{Tuple{Int, Int, Int}, Vector{Tuple{Int, Float64}}}()
+    for key in keys(original_volumes)
+        volume_jacobian[key] = []
+    end
+    
+    # Track which markers have entries
+    markers_with_entries = Set{Int}()
+    
+    for marker_idx in 1:n_markers
+        # Original marker position
+        original_marker = markers[marker_idx]
+        normal = normals[marker_idx]
+        
+        # Positive perturbation
+        pos_perturbed_marker = (
+            original_marker[1] + epsilon * normal[1],
+            original_marker[2] + epsilon * normal[2],
+            original_marker[3] + epsilon * normal[3]
+        )
+        
+        # Negative perturbation
+        neg_perturbed_marker = (
+            original_marker[1] - epsilon * normal[1],
+            original_marker[2] - epsilon * normal[2],
+            original_marker[3] - epsilon * normal[3]
+        )
+        
+        # Create copies of markers with perturbations
+        pos_perturbed_markers = copy(markers)
+        pos_perturbed_markers[marker_idx] = pos_perturbed_marker
+        
+        neg_perturbed_markers = copy(markers)
+        neg_perturbed_markers[marker_idx] = neg_perturbed_marker
+        
+        # Create new front trackers with perturbed markers
+        pos_perturbed_tracker = FrontTracker3D(pos_perturbed_markers, ft.faces, ft.is_closed)
+        neg_perturbed_tracker = FrontTracker3D(neg_perturbed_markers, ft.faces, ft.is_closed)
+        
+        # Track the max Jacobian value for this marker
+        max_jac_value = 0.0
+        max_jac_cell = nothing
+        
+        # Calculate perturbed volumes using central differencing
+        for ((i, j, k), _) in original_volumes
+            cell_bounds = (
+                (x_faces_vec[i], x_faces_vec[i+1]),
+                (y_faces_vec[j], y_faces_vec[j+1]),
+                (z_faces_vec[k], z_faces_vec[k+1])
+            )
+            
+            # Calculate volumes with perturbed fronts
+            pos_volume = compute_fluid_volume_in_cell_3d(pos_perturbed_tracker, cell_bounds)
+            neg_volume = compute_fluid_volume_in_cell_3d(neg_perturbed_tracker, cell_bounds)
+            
+            # Calculate Jacobian value using central differencing
+            jacobian_value = (pos_volume - neg_volume) / (2.0 * epsilon)
+            
+            # Store significant changes
+            if abs(jacobian_value) > 1e-10
+                push!(volume_jacobian[(i, j, k)], (marker_idx, jacobian_value))
+                push!(markers_with_entries, marker_idx)
+                
+                if abs(jacobian_value) > abs(max_jac_value)
+                    max_jac_value = jacobian_value
+                    max_jac_cell = (i, j, k)
+                end
+            elseif abs(jacobian_value) > abs(max_jac_value)
+                max_jac_value = jacobian_value
+                max_jac_cell = (i, j, k)
+            end
+        end
+        
+        # If this marker has no entries, add its maximum value entry
+        if marker_idx ∉ markers_with_entries && max_jac_cell !== nothing
+            push!(volume_jacobian[max_jac_cell], (marker_idx, max_jac_value))
+            push!(markers_with_entries, marker_idx)
+        end
+    end
+    
+    return volume_jacobian
+end
