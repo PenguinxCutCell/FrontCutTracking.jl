@@ -1,3 +1,17 @@
+"""
+    compute_segment_parameters(ft::FrontTracker)
+
+Calcule les paramètres de chaque segment de l'interface:
+- n_I: vecteur normal unitaire du segment
+- α_I: intercept du segment (distance signée à l'origine)
+- length_I: longueur du segment
+- midpoint_I: point milieu du segment
+
+L'équation d'un segment est: n_I ⋅ x = α_I
+
+Retourne (segments, segment_normals, segment_intercepts, segment_lengths, segment_midpoints)
+"""
+
 function compute_segment_parameters(ft::FrontTracker)
     markers = ft.markers
     n_markers = length(markers)
@@ -172,18 +186,3 @@ function compute_segment_cell_intersections(nodes::NTuple{2, AbstractVector}, ft
     return cell_segment_intersections, segments, segment_normals, segment_intercepts, segment_lengths
 end
 
-"""
-    compute_intercept_jacobian(nodes::NTuple{2, AbstractVector}, ft::FrontTracker; density::Float64=1.0)
-
-Calcule la jacobienne des volumes par rapport aux déplacements d'intercept.
-Pour chaque cellule k=(i,j) et chaque segment I, J[k,I] = ∂V_k/∂δ_I = ρL × A_k,I,
-où A_k,I est la longueur d'intersection du segment I avec la cellule k,
-et ρL est un facteur physique (densité × latent heat)
-
-Retourne:
-- intercept_jacobian: Dict{Tuple{Int, Int}, Vector{Tuple{Int, Float64}}} - la jacobienne
-- segments: vecteur des segments (i, j) où i, j sont les indices des marqueurs
-- segment_normals: vecteur des normales unitaires pour chaque segment
-- segment_intercepts: vecteur des intercepts initiaux pour chaque segment
-- segment_lengths: vecteur des longueurs de chaque segment
-"""

@@ -358,10 +358,3 @@ function compute_marker_normals(ft::FrontTracker, markers=nothing)
     
     return normals
 end
-
-"""
-    compute_volume_jacobian(ft::FrontTracker, x_faces::Vector{Float64}, y_faces::Vector{Float64}, epsilon::Float64=1e-6)
-
-Calculates the volume Jacobian matrix for a given mesh and interface.
-This is a more reliable Julia implementation that avoids Python interop issues.
-"""

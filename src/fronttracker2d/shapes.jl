@@ -174,9 +174,3 @@ function create_crystal!(ft::FrontTracker, center_x::Float64, center_y::Float64,
     set_markers!(ft, markers, true)
     return ft
 end
-
-"""
-    get_fluid_polygon(ft::FrontTracker)
-
-Returns a polygon representing the fluid domain bounded by the interface.
-"""

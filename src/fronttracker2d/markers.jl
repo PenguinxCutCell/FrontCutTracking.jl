@@ -60,6 +60,3 @@ function set_markers!(ft::FrontTracker, markers::AbstractVector, is_closed=nothi
     return ft
 end
 
-"""
-Creates a circular interface.
-"""

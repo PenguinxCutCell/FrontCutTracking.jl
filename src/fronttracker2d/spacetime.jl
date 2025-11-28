@@ -963,22 +963,3 @@ function find_crossing_time(front_n::FrontTracker, front_np1::FrontTracker, x::F
     return clamp(t_cross, 0.0, dt)
 end
 
-
-
-
-
-
-
-"""
-    compute_segment_parameters(ft::FrontTracker)
-
-Calcule les paramètres de chaque segment de l'interface:
-- n_I: vecteur normal unitaire du segment
-- α_I: intercept du segment (distance signée à l'origine)
-- length_I: longueur du segment
-- midpoint_I: point milieu du segment
-
-L'équation d'un segment est: n_I ⋅ x = α_I
-
-Retourne (segments, segment_normals, segment_intercepts, segment_lengths, segment_midpoints)
-"""
