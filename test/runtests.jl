@@ -1,142 +1,289 @@
 using Test
+using LinearAlgebra
+using LibGEOS
 using FrontCutTracking
 
-@testset "FrontTracker" begin
-    tracker = FrontTracker()
-
-    @test num_points(tracker) == 0
-    idx1 = add_point!(tracker, (0.0, 0, 0))
-    idx2 = add_point!(tracker, (1, 0, 0))
-    idx3 = add_point!(tracker, (0, 1, 0))
-    idx4 = add_point!(tracker, (0, 0, 1))
-
-    @test num_points(tracker) == 4
-    @test tracker.points[idx1] == (0.0, 0.0, 0.0)
-
-    line_idx = add_line!(tracker, (idx1, idx2))
-    @test num_lines(tracker) == 1
-    @test lines_touching(tracker, idx1) == [tracker.lines[line_idx]]
-
-    surf_idx_a = add_surface!(tracker, (idx1, idx2, idx3))
-    surf_idx_b = add_surface!(tracker, (idx1, idx3, idx4))
-    @test num_surfaces(tracker) == 2
-    @test surfaces_touching(tracker, idx3) == [tracker.surfaces[surf_idx_a], tracker.surfaces[surf_idx_b]]
-
-    @test_throws ArgumentError add_line!(tracker, (0, 10))
-    @test_throws ArgumentError lines_touching(tracker, 10)
-
-    remove_line!(tracker, line_idx)
-    @test num_lines(tracker) == 0
-
-    remove_point!(tracker, idx2)
-    @test num_points(tracker) == 3
-    @test all(p -> p != (1, 0, 0), tracker.points)
-    @test tracker.surfaces == [(idx1, idx3 - 1, idx4 - 1)]
-
-    reset!(tracker)
-    @test num_points(tracker) == 0
-    @test num_lines(tracker) == 0
-    @test num_surfaces(tracker) == 0
-end
-
-@testset "Initializers" begin
-    pt = point_front(position=(1, 2, 3))
-    @test num_points(pt) == 1
-    @test num_lines(pt) == 0
-    @test num_surfaces(pt) == 0
-    @test pt.points[1] == (1.0, 2.0, 3.0)
-
-    line = line_front(length=2.0, segments=2, direction=(0, 0, 1), metadata=Dict(:tag => :line))
-    @test num_points(line) == 3
-    @test num_lines(line) == 2
-    @test line.points[1] == (0.0, 0.0, -1.0)
-    @test line.points[end] == (0.0, 0.0, 1.0)
-    @test line.metadata[:tag] == :line
-
-    circle = circle_front(radius=1.5, segments=8, axis=:z)
-    @test num_points(circle) == 8
-    @test num_lines(circle) == 8
-    radii = map(p -> sqrt(p[1]^2 + p[2]^2), circle.points)
-    @test all(isapprox(r, 1.5; atol=1e-8) for r in radii)
-
-    patch = planar_patch_front(size=(2.0, 1.0), divisions=(2, 1), axis=:y)
-    @test num_points(patch) == (2 + 1) * (1 + 1)
-    @test num_lines(patch) == (1 + 1) * 2 + (2 + 1) * 1
-    @test num_surfaces(patch) == 2 * 2 * 1
-    @test all(isapprox(p[2], 0.0; atol=1e-10) for p in patch.points)
-
-    sphere = sphere_front(radius=2.0, rings=3, segments=6, metadata=Dict(:shape => :sphere))
-    @test num_points(sphere) == 2 + 3 * 6
-    @test num_lines(sphere) == 6 * (2 * 3 + 1)
-    @test num_surfaces(sphere) == 2 * 6 * 3
-    @test sphere.metadata[:shape] == :sphere
-    dists = map(p -> sqrt(p[1]^2 + p[2]^2 + p[3]^2), sphere.points)
-    @test all(isapprox(d, 2.0; atol=1e-8) for d in dists)
-    @test_throws ArgumentError sphere_front(radius=1.0, rings=0)
-    @test_throws ArgumentError sphere_front(radius=1.0, segments=2)
-
-    star = star_front(radius=2.0, spikes=5, dent=0.5, axis=:x)
-    @test num_points(star) == 2 * 5 + 1
-    @test num_lines(star) == 2 * 5
-    @test num_surfaces(star) == 2 * 5
-    @test all(isapprox(p[1], 0.0; atol=1e-10) for p in star.points)
-    radii = map(p -> sqrt(p[2]^2 + p[3]^2), star.points[1:end-1])
-    @test maximum(radii) ≈ 2.0
-    @test minimum(radii) ≈ 1.0
-
-    star_wire = star_front(radius=1.0, spikes=6, dent=0.3, filled=false)
-    @test num_surfaces(star_wire) == 0
-    @test num_points(star_wire) == 2 * 6
-
-    @test_throws ArgumentError star_front(radius=1.0, spikes=2)
-    @test_throws ArgumentError star_front(radius=1.0, dent=0.0)
-
-    rings = 3
-    segments = 10
-    star3d = star3d_front(radius=1.0, spike_length=0.4, petals=7,
-                          rings=rings, segments=segments,
-                          metadata=Dict(:shape => :star3d))
-    expected_points = 2 + rings * segments
-    expected_lines = rings * segments + (rings - 1) * segments + 2 * segments
-    expected_surfaces = 2 * segments * rings
-    @test num_points(star3d) == expected_points
-    @test num_lines(star3d) == expected_lines
-    @test num_surfaces(star3d) == expected_surfaces
-    radii3d = map(p -> sqrt(p[1]^2 + p[2]^2 + p[3]^2), star3d.points)
-    min_radius = minimum(radii3d)
-    max_radius = maximum(radii3d)
-    @test min_radius ≥ 1.0 * (1 - 0.4) - 1e-8
-    @test max_radius ≤ 1.0 * (1 + 0.4) + 1e-8
-    @test star3d.metadata[:shape] == :star3d
-    @test_throws ArgumentError star3d_front(radius=0.0)
-    @test_throws ArgumentError star3d_front(spike_length=1.1)
-    @test_throws ArgumentError star3d_front(petals=2)
-end
-
-@testset "VTK export" begin
-    tracker = sphere_front(radius=0.5, rings=2, segments=4)
-    mktempdir() do dir
-        outfile = write_vtk_front(tracker, joinpath(dir, "sphere"), compress=false)
-        @test endswith(outfile, ".vtu")
-        @test isfile(outfile)
+@testset "Julia FrontTracking Tests" begin
+    
+    @testset "Basic Construction" begin
+        # Create an empty interface
+        front = FrontTracker()
+        @test isempty(front.markers)
+        @test front.is_closed == true
+        @test front.interface === nothing
+        @test front.interface_poly === nothing
+        
+        # Create interface with markers
+        markers = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        front = FrontTracker(markers)
+        # The implementation adds a closing point
+        @test length(front.markers) == 5  
+        @test front.is_closed == true
+        @test front.interface !== nothing
+        @test front.interface_poly !== nothing
     end
-    empty_tracker = FrontTracker()
-    @test_throws ArgumentError write_vtk_front(empty_tracker, "dummy")
+    
+    @testset "Shape Creation" begin
+        # Test circle creation
+        front = FrontTracker()
+        create_circle!(front, 0.5, 0.5, 0.3, 20)
+        markers = get_markers(front)
+        @test length(markers) == 21  # With closing point
+        
+        # Check that markers are approximately on a circle
+        for (x, y) in markers
+            distance = sqrt((x - 0.5)^2 + (y - 0.5)^2)
+            @test isapprox(distance, 0.3, atol=1e-10)
+        end
+        
+        # Test rectangle creation
+        front = FrontTracker()
+        create_rectangle!(front, 0.1, 0.2, 0.8, 0.9)
+        markers = get_markers(front)
+        @test length(markers) == 97
+
+        
+        # Test ellipse creation
+        front = FrontTracker()
+        create_ellipse!(front, 0.5, 0.5, 0.3, 0.2, 20)
+        markers = get_markers(front)
+        @test length(markers) == 21  # With closing point
+        
+        # Check that markers are approximately on an ellipse
+        for (x, y) in markers
+            normalized_distance = ((x - 0.5)/0.3)^2 + ((y - 0.5)/0.2)^2
+            @test isapprox(normalized_distance, 1.0, atol=1e-10)
+        end
+    end
+    
+    @testset "Point Inside Tests" begin
+        # Create a square
+        front = FrontTracker()
+        create_rectangle!(front, 0.0, 0.0, 1.0, 1.0)
+        
+        # Test points inside
+        @test is_point_inside(front, 0.5, 0.5) == true
+        @test is_point_inside(front, 0.1, 0.1) == true
+        @test is_point_inside(front, 0.9, 0.9) == true
+        
+        # Test points outside
+        @test is_point_inside(front, -0.5, 0.5) == false
+        @test is_point_inside(front, 1.5, 0.5) == false
+        @test is_point_inside(front, 0.5, -0.5) == false
+        @test is_point_inside(front, 0.5, 1.5) == false
+    end
+    
+    @testset "SDF Calculation" begin
+        # Create a square centered at origin
+        front = FrontTracker()
+        create_rectangle!(front, -1.0, -1.0, 1.0, 1.0)
+        
+        # Test points inside (should be negative)
+        @test sdf(front, 0.0, 0.0) < 0
+        @test isapprox(sdf(front, 0.0, 0.0), -1.0, atol=1e-2)
+        
+        # Test points outside (should be positive)
+        @test sdf(front, 2.0, 0.0) > 0
+        @test isapprox(sdf(front, 2.0, 0.0), 1.0, atol=1e-2)
+        
+        # Test points on the boundary (should be approximately zero)
+        @test isapprox(sdf(front, 1.0, 0.0), 0.0, atol=1e-2)
+        @test isapprox(sdf(front, 0.0, 1.0), 0.0, atol=1e-2)
+        
+        # Create a circle for additional tests
+        front = FrontTracker()
+        create_circle!(front, 0.0, 0.0, 1.0)
+        
+        # Test points at various distances from circle
+        @test isapprox(sdf(front, 0.0, 0.0), -1.0, atol=1e-2)  # Center should be -radius
+        @test isapprox(sdf(front, 2.0, 0.0), 1.0, atol=1e-2)   # Outside, distance = 1
+        @test isapprox(sdf(front, 0.5, 0.0), -0.5, atol=1e-2)  # Inside, distance = 0.5
+    end
+    
+
+    @testset "Normals and Curvature" begin
+        @testset "Circle Normals" begin
+            # Create a circle centered at origin
+            radius = 0.5
+            center_x, center_y = 0.0, 0.0
+            front = FrontTracker()
+            create_circle!(front, center_x, center_y, radius, 32)
+            
+            # Calculate normals
+            markers = get_markers(front)
+            normals = compute_marker_normals(front, markers)
+            
+            # For a circle, normals should point away from center with unit length
+            for i in 1:length(markers)-1 # Skip last point (duplicate of first for closed shape)
+                x, y = markers[i]
+                nx, ny = normals[i]
+                
+                # Expected normal: unit vector from center to point
+                dist = sqrt((x - center_x)^2 + (y - center_y)^2)
+                expected_nx = (x - center_x) / dist
+                expected_ny = (y - center_y) / dist
+                
+                # Check that normal is a unit vector
+                @test isapprox(nx^2 + ny^2, 1.0, atol=1e-6)
+                
+                # Check normal direction
+                @test isapprox(nx, expected_nx, atol=1e-6)
+                @test isapprox(ny, expected_ny, atol=1e-6)
+            end
+        end
+    end
+    
+    @testset "Volume Jacobian" begin
+        # Create a circular interface
+        front = FrontTracker()
+        create_circle!(front, 0.5, 0.5, 0.3)
+        
+        # Create a simple mesh grid
+        x_faces = 0.0:0.1:1.0
+        y_faces = 0.0:0.1:1.0
+        
+        # Compute the volume Jacobian
+        jacobian = compute_volume_jacobian(front, x_faces, y_faces)
+        
+        # Basic checks
+        @test isa(jacobian, Dict{Tuple{Int, Int}, Vector{Tuple{Int, Float64}}})
+        
+        # At least some cells should have non-zero Jacobian entries
+        @test any(length(values) > 0 for (_, values) in jacobian)
+        
+        # Cells far from the interface should have zero Jacobian entries
+        # Cells at corner (1,1) and (10,10) should be outside the circle
+        @test length(get(jacobian, (1, 1), [])) == 0
+        @test length(get(jacobian, (10, 10), [])) == 0
+        
+        # Cells near the interface should have non-zero Jacobian entries
+        # Find where the interface crosses cells
+        has_nonzero_entries = false
+        for i in 1:length(x_faces)-1
+            for j in 1:length(y_faces)-1
+                if haskey(jacobian, (i, j)) && !isempty(jacobian[(i, j)])
+                    has_nonzero_entries = true
+                    break
+                end
+            end
+            if has_nonzero_entries
+                break
+            end
+        end
+        @test has_nonzero_entries
+
+    end
 end
 
-@testset "Signed distance" begin
-    tracker = sphere_front(radius=1.0, rings=5, segments=12)
-    d_center = signed_distance(tracker, (0, 0, 0))
-    @test d_center < 0
-    @test isapprox(abs(d_center), 1.0; atol=0.2)
+@testset "FrontTracker1D Basic Functionality" begin
+    # Test constructors
+    ft_empty = FrontTracker1D()
+    @test isempty(get_markers(ft_empty))
 
-    d_out = signed_distance(tracker, (1.4, 0, 0))
-    @test d_out > 0
-    @test isapprox(d_out, 0.4; atol=0.2)
+    ft = FrontTracker1D([0.3, 0.7])
+    @test get_markers(ft) == [0.3, 0.7]
 
-    batch = signed_distance(tracker, [(0, 0, 0.5), (2, 0, 0)])
-    @test length(batch) == 2
-    @test batch[1] < 0 && batch[2] > 0
+    # Test add_marker!
+    add_marker!(ft, 0.5)
+    @test get_markers(ft) == sort([0.3, 0.5, 0.7])
 
-    @test_throws ArgumentError signed_distance(FrontTracker(), (0, 0, 0))
+    # Test set_markers!
+    set_markers!(ft, [0.1, 0.9])
+    @test get_markers(ft) == [0.1, 0.9]
+
+    # Test is_point_inside
+    @test !is_point_inside(ft, 0.0)
+    @test is_point_inside(ft, 0.5)
+    @test !is_point_inside(ft, 1.0)
+
+    # Test sdf
+    @test sdf(ft, 0.0) > 0
+    @test sdf(ft, 0.5) < 0
+    @test sdf(ft, 1.0) > 0
+end
+
+@testset "FrontTracker1D Capacity Calculation" begin
+    # Simple mesh and front
+    nx = 10
+    lx = 1.0
+    x_nodes = collect(range(0.0, stop=lx, length=nx+1))
+    ft = FrontTracker1D([0.3, 0.7])
+
+    caps = compute_capacities_1d((x_nodes,), ft)
+    @test length(caps[:fractions]) == nx+1
+    @test length(caps[:volumes]) == nx+1
+    @test length(caps[:centroids_x]) == nx+1
+    @test length(caps[:cell_types]) == nx+1
+    @test length(caps[:Ax]) == nx+1
+    @test length(caps[:Wx]) == nx+1
+    @test length(caps[:Bx]) == nx+1
+
+    # Check that fluid fractions are between 0 and 1
+    @test all(0 .<= caps[:fractions] .<= 1)
+end
+
+@testset "FrontTracker1D Space-Time Capacity Calculation" begin
+    nx = 10
+    lx = 1.0
+    x_nodes = collect(range(0.0, stop=lx, length=nx+1))
+    ft_n = FrontTracker1D([0.3, 0.7])
+    ft_np1 = FrontTracker1D([0.35, 0.75])
+    dt = 0.1
+
+    st_caps = compute_spacetime_capacities_1d((x_nodes,), ft_n, ft_np1, dt)
+    @test length(st_caps[:Ax_spacetime]) == nx+1
+    @test length(st_caps[:V_spacetime]) == nx+1
+    @test length(st_caps[:Bx_spacetime]) == nx+1
+    @test length(st_caps[:Wx_spacetime]) == nx+1
+    @test length(st_caps[:ST_centroids]) == nx
+    @test length(st_caps[:ms_cases]) == nx
+    @test length(st_caps[:edge_types]) == nx+1
+    @test length(st_caps[:t_crosses]) == nx+1
+    @test length(st_caps[:center_types]) == nx
+    @test length(st_caps[:t_crosses_center]) == nx
+end
+
+@testset "Geometric Metrics" begin
+    center_x, center_y = 0.45, 0.55
+    radius = 0.27
+    front = FrontTracker()
+    create_circle!(front, center_x, center_y, radius, 720)
+
+    poly = get_fluid_polygon(front)
+    @test !isnothing(poly)
+
+    area = LibGEOS.area(poly)
+    expected_area = π * radius^2
+    @test isapprox(area, expected_area; atol=1e-3)
+
+    centroid_geom = LibGEOS.centroid(poly)
+    centroid = (
+        LibGEOS.getcoord(centroid_geom, 1),
+        LibGEOS.getcoord(centroid_geom, 2),
+    )
+    @test isapprox(centroid[1], center_x; atol=1e-3)
+    @test isapprox(centroid[2], center_y; atol=1e-3)
+
+    expected_perimeter = 2π * radius
+
+    segments, _, _, segment_lengths, _ = compute_segment_parameters(front)
+    discrete_perimeter = sum(segment_lengths)
+    @test isapprox(discrete_perimeter, expected_perimeter; atol=1e-3)
+
+    nx = 64
+    ny = 64
+    x_nodes = collect(range(0.0, stop=1.0, length=nx+1))
+    y_nodes = collect(range(0.0, stop=1.0, length=ny+1))
+    capacities = compute_capacities((x_nodes, y_nodes), front)
+    volume_sum = sum(capacities[:volumes])
+    @test isapprox(volume_sum, expected_area; atol=5e-3)
+
+    vol = capacities[:volumes]
+    cx = capacities[:centroids_x]
+    cy = capacities[:centroids_y]
+    total_mass = sum(vol)
+    centroid_x = sum(vol .* cx) / total_mass
+    centroid_y = sum(vol .* cy) / total_mass
+    @test isapprox(centroid_x, center_x; atol=5e-3)
+    @test isapprox(centroid_y, center_y; atol=5e-3)
 end

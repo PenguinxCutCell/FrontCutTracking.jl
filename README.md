@@ -1,67 +1,61 @@
 # FrontCutTracking.jl
 
-Minimal utilities for building and manipulating 0D/1D/2D fronts used in front
-tracking style algorithms. The `FrontTracker` container stores points, lines,
-and triangular surfaces with simple mutation helpers plus a few ready-made
-initializers for classical interface setups.
+FrontCutTracking.jl provides lightweight 1D/2D front-tracking helpers in pure Julia.
+It exposes `FrontTracker` (2D) and `FrontTracker1D` containers along with geometry,
+capacity, and space–time utilities used in cut-cell and interface-capturing codes.
 
-![Sphere 3D front](img/sphere_3d.png)
-## Quick start
+## Installing
 
 ```julia
-julia> using FrontCutTracking
-
-julia> tracker = FrontTracker();
-
-julia> a = add_point!(tracker, (0, 0, 0));
-julia> b = add_point!(tracker, (1, 0, 0));
-julia> add_line!(tracker, (a, b));
-1
+julia> ]
+pkg> dev https://github.com/PenguinxCutCell/FrontCutTracking.jl
 ```
 
-## Classical initializers
+The project ships with a `Project.toml`, so activating the repo directory is
+enough for running tests or experimenting with the API.
+
+## Quick Start (2D)
 
 ```julia
-circle = circle_front(radius = 1.0, segments = 32)
-line   = line_front(length = 0.1, segments = 5, direction = (0, 1, 0))
-patch  = planar_patch_front(size = (1.0, 1.0), divisions = (8, 8))
-sphere = sphere_front(radius = 0.5, rings = 6, segments = 24)
-star   = star_front(radius = 2.0, spikes = 5, dent = 0.4)
-star3d = star3d_front(radius = 1.0, petals = 8, spike_length = 0.25)
+using FrontCutTracking
+
+front = FrontTracker()
+create_circle!(front, 0.5, 0.5, 0.25, 120) # populate markers
+
+nodes = ([0.0:0.05:1.0;], [0.0:0.05:1.0;])
+capacities = compute_capacities(nodes, front)
+
+segments = compute_segment_parameters(front)
+segment_lengths = segments[4]
+perimeter = sum(segment_lengths) # discrete perimeter via segment lengths
 ```
 
-`star3d_front` modulates a sphere with sinusoidal lobes, yielding a smooth,
-flower-like surface; tweak the `petals` count and `spike_length` amplitude to
-match the effect you need.
+Key helpers:
+- `create_circle!`, `create_rectangle!`, `create_ellipse!`, `create_crystal!`
+- `fluid_cell_properties`, `compute_surface_capacities`, `compute_capacities`
+- `compute_spacetime_capacities`, `compute_segment_cell_intersections`
+- `compute_intercept_jacobian`, `update_front_with_intercept_displacements!`
 
-Each initializer returns a fully populated `FrontTracker`, so you can start
-advecting or augmenting them immediately (for instance, to tag metadata or add
-additional connectivity).
-
-## Exporting to ParaView
-
-Install `WriteVTK` (already listed as a dependency) and call:
+## Quick Start (1D)
 
 ```julia
-tracker = sphere_front(radius = 0.5)
-write_vtk_front(tracker, "front_sphere")  # creates front_sphere.vtu
+front = FrontTracker1D([0.3, 0.7])
+mesh = ([0.0:0.1:1.0;],)
+
+caps = compute_capacities_1d(mesh, front)
+st_caps = compute_spacetime_capacities_1d(mesh, front, front, 0.01)
 ```
 
-Open the resulting `.vtu` file inside ParaView to inspect the mesh.
+## Project Layout
 
-## Signed distance queries
+- `src/fronttracker/`: 2D front tracker split into `types`, `markers`, `shapes`,
+  `geometry`, `capacities`, `spacetime`, `segments`, and `intercepts`.
+- `src/fronttracker1d/`: 1D equivalents (`types`, `geometry`, `capacities`, `spacetime`).
+- `test/`: unit tests covering FrontTracker, FrontTracker1D, and analytic geometry checks.
 
-```julia
-sphere = sphere_front(radius = 1.0, rings = 6, segments = 12)
-d_center = signed_distance(sphere, (0, 0, 0))    # negative (inside)
-d_far    = signed_distance(sphere, (2, 0, 0))    # positive (outside)
-```
-
-The function expects a closed surface (triangular connectivity) and returns the
-minimum distance while assigning a sign via ray casting.
-
-## Running the tests
+## Running Tests
 
 ```bash
-julia --project -e 'using Pkg; Pkg.test()'
+julia --project -e "using Pkg; Pkg.test()"
 ```
+
