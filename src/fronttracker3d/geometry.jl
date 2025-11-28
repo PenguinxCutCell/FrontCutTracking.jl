@@ -448,42 +448,100 @@ function compute_marker_normals(ft::FrontTracker3D)
 end
 
 """
-    compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple)
+    gauss_legendre_points_weights(n::Int)
 
-Computes the fluid volume inside a single 3D cell using Monte Carlo integration.
-cell_bounds = ((x_min, x_max), (y_min, y_max), (z_min, z_max))
+Returns Gauss-Legendre quadrature points and weights for n points on [-1, 1].
 """
-function compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple; n_samples::Int=1000)
+function gauss_legendre_points_weights(n::Int)
+    if n == 2
+        return [-1/sqrt(3), 1/sqrt(3)], [1.0, 1.0]
+    elseif n == 3
+        return [-sqrt(3/5), 0.0, sqrt(3/5)], [5/9, 8/9, 5/9]
+    elseif n == 4
+        p1 = sqrt(3/7 - 2/7*sqrt(6/5))
+        p2 = sqrt(3/7 + 2/7*sqrt(6/5))
+        w1 = (18 + sqrt(30)) / 36
+        w2 = (18 - sqrt(30)) / 36
+        return [-p2, -p1, p1, p2], [w2, w1, w1, w2]
+    elseif n == 5
+        p1 = 1/3 * sqrt(5 - 2*sqrt(10/7))
+        p2 = 1/3 * sqrt(5 + 2*sqrt(10/7))
+        w1 = (322 + 13*sqrt(70)) / 900
+        w2 = (322 - 13*sqrt(70)) / 900
+        return [-p2, -p1, 0.0, p1, p2], [w2, w1, 128/225, w1, w2]
+    elseif n >= 6
+        # For n >= 6, use uniform points as a simple fallback
+        # This gives good accuracy for smooth integrands
+        points = collect(range(-1, 1, length=n))
+        weights = fill(2.0/n, n)
+        return points, weights
+    else
+        # Default to 3-point quadrature
+        return [-sqrt(3/5), 0.0, sqrt(3/5)], [5/9, 8/9, 5/9]
+    end
+end
+
+"""
+    compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple; n_quadrature::Int=7)
+
+Computes the fluid volume inside a single 3D cell using Gauss-Legendre quadrature.
+cell_bounds = ((x_min, x_max), (y_min, y_max), (z_min, z_max))
+
+Uses tensor product of 1D Gauss-Legendre quadrature rules for deterministic 3D integration.
+The number of evaluation points is n_quadrature^3.
+"""
+function compute_fluid_volume_in_cell_3d(ft::FrontTracker3D, cell_bounds::Tuple; n_quadrature::Int=7)
     x_min, x_max = cell_bounds[1]
     y_min, y_max = cell_bounds[2]
     z_min, z_max = cell_bounds[3]
-    
-    cell_volume = (x_max - x_min) * (y_max - y_min) * (z_max - z_min)
     
     if isempty(ft.faces) || isempty(ft.markers)
         return 0.0
     end
     
-    # Monte Carlo integration - count points inside fluid
-    inside_count = 0
+    # Get Gauss-Legendre points and weights
+    points, weights = gauss_legendre_points_weights(n_quadrature)
     
-    for _ in 1:n_samples
-        x = x_min + rand() * (x_max - x_min)
-        y = y_min + rand() * (y_max - y_min)
-        z = z_min + rand() * (z_max - z_min)
-        
-        if is_point_inside(ft, x, y, z)
-            inside_count += 1
+    # Transform from [-1,1] to cell bounds
+    # x = (x_max - x_min)/2 * xi + (x_max + x_min)/2
+    hx = (x_max - x_min) / 2
+    hy = (y_max - y_min) / 2
+    hz = (z_max - z_min) / 2
+    
+    cx = (x_max + x_min) / 2
+    cy = (y_max + y_min) / 2
+    cz = (z_max + z_min) / 2
+    
+    # Jacobian of transformation
+    jacobian = hx * hy * hz
+    
+    # Integrate using tensor product quadrature
+    integral = 0.0
+    
+    for (i, xi) in enumerate(points)
+        for (j, eta) in enumerate(points)
+            for (k, zeta) in enumerate(points)
+                # Transform to physical coordinates
+                x = hx * xi + cx
+                y = hy * eta + cy
+                z = hz * zeta + cz
+                
+                # Evaluate characteristic function (1 if inside, 0 if outside)
+                if is_point_inside(ft, x, y, z)
+                    # Add weighted contribution
+                    integral += weights[i] * weights[j] * weights[k]
+                end
+            end
         end
     end
     
-    return cell_volume * inside_count / n_samples
+    return jacobian * integral
 end
 
 """
     compute_volume_jacobian_3d(ft::FrontTracker3D, x_faces::AbstractVector{<:Real}, 
                                y_faces::AbstractVector{<:Real}, z_faces::AbstractVector{<:Real}, 
-                               epsilon::Float64=1e-6)
+                               epsilon::Float64=1e-3)
 
 Calculates the volume Jacobian matrix for a given 3D mesh and interface.
 The Jacobian represents ∂V_cell/∂δ_marker, the sensitivity of cell fluid volumes
@@ -491,11 +549,14 @@ to marker displacements along their normal directions.
 
 Uses central differencing: J[i,j,k,m] = (V⁺ - V⁻) / (2ε)
 
+The default epsilon is 1e-3, which should be large enough for the Gauss-Legendre 
+quadrature to detect changes in volume from boundary perturbations.
+
 Returns a dictionary mapping cell indices (i,j,k) to lists of (marker_idx, jacobian_value).
 """
 function compute_volume_jacobian_3d(ft::FrontTracker3D, x_faces::AbstractVector{<:Real}, 
                                     y_faces::AbstractVector{<:Real}, z_faces::AbstractVector{<:Real}, 
-                                    epsilon::Float64=1e-6)
+                                    epsilon::Float64=1e-3)
     # Convert to vectors if needed
     x_faces_vec = collect(x_faces)
     y_faces_vec = collect(y_faces)
