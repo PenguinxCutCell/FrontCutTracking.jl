@@ -3,14 +3,14 @@ module FrontCutTracking
 using GeoInterface
 using LibGEOS
 
-include("fronttracker/types.jl")
-include("fronttracker/markers.jl")
-include("fronttracker/shapes.jl")
-include("fronttracker/geometry.jl")
-include("fronttracker/capacities.jl")
-include("fronttracker/spacetime.jl")
-include("fronttracker/segments.jl")
-include("fronttracker/intercepts.jl")
+include("fronttracker2d/types.jl")
+include("fronttracker2d/markers.jl")
+include("fronttracker2d/shapes.jl")
+include("fronttracker2d/geometry.jl")
+include("fronttracker2d/capacities.jl")
+include("fronttracker2d/spacetime.jl")
+include("fronttracker2d/segments.jl")
+include("fronttracker2d/intercepts.jl")
 
 include("fronttracker1d/types.jl")
 include("fronttracker1d/geometry.jl")
